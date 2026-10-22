@@ -22,5 +22,4 @@ jobs:
       - name: Sync forks
         env:
           GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
-          SYNC_MODE: ${{ inputs.sync_mode || 'safe' }}
-        run: bash scripts/sync-forks.sh
+        run: bash scripts/sync.sh
