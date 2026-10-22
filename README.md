@@ -2,7 +2,7 @@
 
 An easy way to manage multiple upstream forks with pure GitBub Actions. It will create individual forked repositories and automatically update them as the upstreams are updated. For those who have multiple upstream repositories to track.
 
-> Note: This currently only works for tracking GitHub repos. Support for other upstream sources (repos, servers, etc.) will be added later.
+> Note: This is intended for tracking GitHub repos only.
 
 
 ## Prerequisites
@@ -44,3 +44,4 @@ The default is **safe**.
 2. This action does not guarantee that all metadata about the upstream will be forked, nor does it guarantee that the action will run at the exact time specified. Some repos also do not allow forking. If you need to ensure metadata or a consistent update, another approach will be needed.
 3. Currently, this action forks the default branch and only the default branch. If you wish to make changes on the fork, make sure to do so on a different branch to be safe.
 4. Make sure to manually run it at least once to test on your setup.
+5. Fork visibility is dependent on upstream GitHub settings.
