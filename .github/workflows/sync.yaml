@@ -4,15 +4,6 @@ on:
   schedule:
     - cron: "30 17 * * *"
   workflow_dispatch:
-    inputs:
-      sync_mode:
-        description: "safe = no force reset; mirror = upstream wins"
-        type: choice
-        options:
-          - safe
-          - mirror
-        default: safe
-        required: true
 
 permissions:
   contents: read
