@@ -30,10 +30,11 @@ You will need to add this PAT to this action's secret under `FORK_SYNC_TOKEN`.
 
 ## Sync Mode (Optional)
 
-This action allows for two types of sync mode per repository:
+This action allows for the following types of sync mode per repository:
 
-**mirror**: Upstream will always be mirrored to the fork. Local fork changes are not saved on the default fork branch.
-**safe**: Any changes made on the local branch will cause the fork update to fail and reported.
+- **mirror**: Upstream will always be mirrored to the fork. Local fork changes are not saved on the default fork branch.
+- **safe**: Any changes made on the local branch will cause the fork update to fail and reported.
+- **skip**: No changes will be made. Any existing forks will not be touched. A psudo *dry-run*.
 
 The default is **safe**.
 
