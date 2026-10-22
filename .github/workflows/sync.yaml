@@ -1,9 +1,18 @@
-name: "Fork and Sync Upstream GitHub Repositories"
+name: Fork and Sync Upstream GitHub Repositories
 
 on:
   schedule:
     - cron: "30 17 * * *"
   workflow_dispatch:
+    inputs:
+      sync_mode:
+        description: "safe = no force reset; mirror = upstream wins"
+        type: choice
+        options:
+          - safe
+          - mirror
+        default: safe
+        required: true
 
 permissions:
   contents: read
@@ -14,3 +23,13 @@ concurrency:
 
 jobs:
   sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out this fork manager
+        uses: actions/checkout@v4
+
+      - name: Sync forks
+        env:
+          GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
+          SYNC_MODE: ${{ inputs.sync_mode || 'safe' }}
+        run: bash scripts/sync-forks.sh
