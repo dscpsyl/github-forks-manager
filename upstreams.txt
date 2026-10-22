@@ -1,1 +1,1 @@
-# In the format of "owner/repo". One upstream source per line.
+# In the format of "owner/repo | mode[mirror|safe]". One upstream source per line.
