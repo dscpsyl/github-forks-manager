@@ -1,98 +1,218 @@
+
 #!/usr/bin/env bash
-set -uo pipefail
+set -euo pipefail
 
+# Configuration
+readonly MANIFEST="upstreams.txt"
+readonly VALID_MODES=("safe" "mirror" "skip")
+
+# Exit if authentication is missing.
 : "${GH_TOKEN:?Set GH_TOKEN to a GitHub token}"
-: "${SYNC_MODE:=safe}"
 
-if [[ "$SYNC_MODE" != "safe" && "$SYNC_MODE" != "mirror" ]]; then
-  echo "SYNC_MODE must be safe or mirror" >&2
-  exit 2
-fi
+# Remove leading/trailing whitespace.
+trim() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
 
-OWNER="$(gh api user --jq .login)" || exit 1
-FAILED=0
+# Log a GitHub Actions error and mark the run as failed.
+fail() {
+  printf '::error::%s\n' "$*" >&2
+  FAILED=1
+}
 
-while IFS= read -r line || [[ -n "$line" ]]; do
+# Parse a manifest entry: OWNER/REPO [| MODE]
+# Defaults to safe if mode is omitted or empty.
+parse_entry() {
+  local line="$1"
+  local upstream mode
 
-  # Remove comments and surrounding whitespace.
-  upstream="${line%%#*}"
-  upstream="$(printf '%s' "$upstream" | xargs)"
-  [[ -z "$upstream" ]] && continue
+  line="$(trim "$line")"
+
+  # Ignore blank lines and full-line comments.
+  [[ -z "$line" || "$line" == \#* ]] && return 1
+
+  # Remove inline comments.
+  line="$(trim "${line%%#*}")"
+
+  if [[ "$line" == *"|"* ]]; then
+    upstream="$(trim "${line%%|*}")"
+    mode="$(trim "${line#*|}")"
+  else
+    upstream="$line"
+    mode="safe"
+  fi
+
+  # An empty mode defaults to safe.
+  mode="${mode:-safe}"
 
   if [[ ! "$upstream" =~ ^[^/]+/[^/]+$ ]]; then
-    echo "::error::Invalid repository: $upstream"
-    FAILED=1
-    continue
+    fail "Invalid repository entry: '$upstream'"
+    return 2
   fi
 
-  name="${upstream##*/}"
-  fork="$OWNER/$name-mirror"
+  case "$mode" in
+    safe|mirror|skip) ;;
+    *)
+      fail "Invalid mode '$mode' for '$upstream'; use safe, mirror, or skip"
+      return 2
+      ;;
+  esac
 
-  echo "::group::${upstream} -> ${fork}"
+  PARSED_UPSTREAM="$upstream"
+  PARSED_MODE="$mode"
+}
 
-  # Read source metadata; this also verifies access to private sources.
-  if ! metadata="$(gh api "repos/$upstream" \
-      --jq '[.default_branch, .fork]' 2>/dev/null)"; then
-    echo "::error::Cannot access upstream $upstream"
-    FAILED=1
-    echo "::endgroup::"
-    continue
-  fi
+# Check whether a repository is accessible to the authenticated account.
+repository_exists() {
+  gh api "repos/$1" --silent >/dev/null 2>&1
+}
 
-  branch="$(gh api "repos/$upstream" --jq .default_branch)" || {
-    FAILED=1
-    echo "::endgroup::"
-    continue
-  }
+# Wait for a newly created fork to become accessible.
+wait_for_fork() {
+  local fork="$1"
+  local attempt
 
-  # Check whether the destination already exists.
-  if gh api "repos/$fork" --silent 2>/dev/null; then
-    echo "Destination exists: $fork"
-  else
-    echo "Creating fork of $upstream"
-
-    if ! gh repo fork "$upstream" \
-        --fork-name "$name" --clone=false; then
-      echo "::error::Could not create fork $fork"
-      FAILED=1
-      echo "::endgroup::"
-      continue
+  for attempt in {1..12}; do
+    if repository_exists "$fork"; then
+      return 0
     fi
+    sleep 10
+  done
 
-    # Fork creation can take a short time to complete.
-    ready=0
-    for attempt in {1..12}; do
-      if gh api "repos/$fork" --silent 2>/dev/null; then
-        ready=1
-        break
-      fi
-      sleep 10
-    done
+  return 1
+}
 
-    if [[ "$ready" != 1 ]]; then
-      echo "::error::Fork not available: $fork"
-      FAILED=1
-      echo "::endgroup::"
-      continue
-    fi
+# Ensure a fork exists. The fork name is the upstream repo name.
+ensure_fork() {
+  local upstream="$1"
+  local fork="$2"
+
+  if repository_exists "$fork"; then
+    echo "Fork already exists: $fork"
+    return 0
   fi
 
-  # Sync only the upstream default branch.
+  echo "Creating fork of $upstream as $fork"
+
+  if ! gh repo fork "$upstream" \
+      --fork-name "${fork##*/}" \
+      --clone=false; then
+    fail "Fork creation failed: $fork"
+    return 1
+  fi
+
+  if ! wait_for_fork "$fork"; then
+    fail "Fork did not become accessible: $fork"
+    return 1
+  fi
+}
+
+# Sync one fork using its configured policy.
+sync_fork() {
+  local upstream="$1"
+  local mode="$2"
+  local fork="$3"
+  local branch
+  local -a args
+
+  if [[ "$mode" == "skip" ]]; then
+    echo "Skipping $upstream (mode: skip)"
+    return 0
+  fi
+
+  # Read the upstream's current default branch.
+  if ! branch="$(gh api "repos/$upstream" \
+      --jq '.default_branch')"; then
+    fail "Cannot read upstream or default branch: $upstream"
+    return 1
+  fi
+
+  if [[ -z "$branch" || "$branch" == "null" ]]; then
+    fail "Upstream has no readable default branch: $upstream"
+    return 1
+  fi
+
+  if ! ensure_fork "$upstream" "$fork"; then
+    return 1
+  fi
+
   args=(repo sync "$fork" --source "$upstream" --branch "$branch")
 
-  if [[ "$SYNC_MODE" == "mirror" ]]; then
+  if [[ "$mode" == "mirror" ]]; then
     args+=(--force)
+    echo "Mirror mode: upstream is authoritative for $fork ($branch)"
+  else
+    echo "Safe mode: syncing $fork ($branch) without force"
   fi
 
   if gh "${args[@]}"; then
-    echo "Sync successful: $fork ($branch)"
+    echo "Sync successful: $fork"
+    return 0
   else
-    echo "::error::Sync failed: $fork ($branch)"
-    echo "Check permissions, branch divergence, and repository settings."
-    FAILED=1
+    fail "Sync failed: $fork (mode: $mode)"
+    return 1
+  fi
+}
+
+main() {
+  local owner line
+  local line_no=0
+  local upstream mode fork
+  local parse_status
+
+  if [[ ! -r "$MANIFEST" ]]; then
+    echo "Manifest not readable: $MANIFEST" >&2
+    return 2
   fi
 
-  echo "::endgroup::"
-done < upstreams.txt
+  if ! owner="$(gh api user --jq '.login')"; then
+    echo "Unable to determine authenticated GitHub user" >&2
+    return 2
+  fi
 
-exit "$FAILED"
+  echo "Authenticated GitHub account: $owner"
+  echo "Reading manifest: $MANIFEST"
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    ((line_no += 1))
+
+    parse_entry "$line"
+    parse_status=$?
+
+    # 1 = blank/comment; 2 = invalid entry.
+    if [[ "$parse_status" -eq 1 ]]; then
+      continue
+    elif [[ "$parse_status" -ne 0 ]]; then
+      echo "Error on manifest line $line_no"
+      continue
+    fi
+
+    upstream="$PARSED_UPSTREAM"
+    mode="$PARSED_MODE"
+
+    if [[ "$mode" == "skip" ]]; then
+      echo "Skipping $upstream (mode: skip)"
+      continue
+    fi
+
+    # Forks are created under the authenticated user's account.
+    fork="$owner/${upstream##*/}-mirror"
+
+    echo "::group::Line $line_no: $upstream [$mode]"
+    sync_fork "$upstream" "$mode" "$fork" || true
+    echo "::endgroup::"
+  done < "$MANIFEST"
+
+  if [[ "$FAILED" -ne 0 ]]; then
+    echo "Completed with errors; see messages above."
+    return 1
+  fi
+
+  echo "All configured repositories processed successfully."
+}
+
+FAILED=0
+main "$@"
