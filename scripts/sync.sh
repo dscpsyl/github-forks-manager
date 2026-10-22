@@ -1,6 +1,6 @@
 
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 
 # Configuration
 readonly MANIFEST="upstreams.txt"
