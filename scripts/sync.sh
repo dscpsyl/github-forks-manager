@@ -90,6 +90,7 @@ ensure_fork() {
   local upstream="$1"
   local fork="$2"
 
+  # If the destination already exists, reuse it.
   if repository_exists "$fork"; then
     echo "Fork already exists: $fork"
     return 0
@@ -100,6 +101,13 @@ ensure_fork() {
   if ! gh repo fork "$upstream" \
       --fork-name "${fork##*/}" \
       --clone=false; then
+
+    # Fork creation may have succeeded despite a delayed API response.
+    if repository_exists "$fork"; then
+      echo "Fork now exists: $fork"
+      return 0
+    fi
+
     fail "Fork creation failed: $fork"
     return 1
   fi
@@ -108,6 +116,9 @@ ensure_fork() {
     fail "Fork did not become accessible: $fork"
     return 1
   fi
+
+  echo "Fork created successfully: $fork"
+  return 0
 }
 
 # Sync one fork using its configured policy.
